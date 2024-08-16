@@ -1,0 +1,18 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",
+        "strict": true,
+        "sourceMap": false,
+        "outDir":"./dist",
+        "removeComments": true,
+        "pretty":false,
+        "target": "es6"
+    },
+    "files": [
+        "src/lib.ts",
+        "src/templateHandler.ts",
+        "src/taskpane.ts",
+        "src/guidanceSheetHandler.ts",
+        "src/template/Testing/1.0.ts",
+    ]
+}

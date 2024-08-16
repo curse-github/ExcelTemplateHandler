@@ -1,0 +1,24 @@
+on registering:
+    add-in prevents you from registering on a sheet that isn't completely empty
+    add-in can detect old template and will not load the add-in
+
+on changes:
+    changes are detecting by reading only the area that you changed, not the entire sheet at once.
+    changes in un-authorized places(such as a non-input, or area to the right of the table) get overridden, but other changes with remain as the user pasted them
+    changes to an input will only mark dependent sections as needing to re-calculate
+
+on processing:
+    when process is pressed on the sections that need it will be updated.
+    when processing the cursor gets locked in place to prevent the user from making changes during that time
+    
+
+general:
+    A template can now have "settings" which get saved and loaded from the metadata section of the file
+    totals are now be static values not formulas
+    problems with filtering and sorting should be fixed
+
+easy functions for:
+    aliasing a column into another sheet
+    summing two or more columns into another
+    averaging two or more columns into another
+    validating input on a column
