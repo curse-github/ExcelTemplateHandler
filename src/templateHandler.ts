@@ -52,6 +52,7 @@ interface TableSheetColumnData {
     totalCustomValue?:string;
 
     letter:string;
+    isDirty:boolean;
     sum:number;
     count:number;
     countN:number;
@@ -81,10 +82,12 @@ class TableSheetColumnGroup {
     setDirty():void {
         if (this.isDirty) return;
         this.isDirty=true;
-        this.sheetHandler.worksheet.tabColor.set("#CCCC00");
+        this.sheetHandler.worksheet.tabColor.set("#FF0000");
         this.sheetHandler.unprotect()
-        for (let i = 0; i < this.columns.length; i++)
-            this.sheetHandler.worksheet.getRange("$"+this.sheetHandler.columns[this.columns[i]].letter+"$"+(1+this.sheetHandler.settings.headers.length)).fill.set("#CCCC00");
+        for (const column of this.columns) {
+            this.sheetHandler.worksheet.getRange("$"+this.sheetHandler.columns[column].letter+"$"+(1+this.sheetHandler.settings.headers.length)).fill.set("#FF0000");
+            this.sheetHandler.columns[column].isDirty=true;
+        }
         this.sheetHandler.protect()
         // mark any dependent on a column within this group as dirty as well
         for (const column of this.columns) {
@@ -98,23 +101,26 @@ class TableSheetColumnGroup {
         // make sure TableSheetHandler is aware that we are getting the values, so it can keep track of dependecies
         TableSheetHandler.currColumnGroup=this;
         const values:any[][] = await this.process();
+
         TableSheetHandler.currColumnGroup=undefined;
         this.sheetHandler.setColumns(this.columns,values);
         this.isDirty=false;
         this.hasInit=true;
-        this.sheetHandler.worksheet.tabColor.set("");
         this.sheetHandler.unprotect()
-        for (let i = 0; i < this.columns.length; i++)
-            this.sheetHandler.worksheet.getRange("$"+this.sheetHandler.columns[this.columns[i]].letter+"$"+(1+this.sheetHandler.settings.headers.length)).fill.clear();
+        for (const column of this.columns) {
+            this.sheetHandler.worksheet.getRange("$"+this.sheetHandler.columns[column].letter+"$"+(1+this.sheetHandler.settings.headers.length)).fill.clear();
+            this.sheetHandler.columns[column].isDirty=false;
+        }
         this.sheetHandler.protect()
     }
     async clean():Promise<void> {
         this.sheetHandler.setColumns(this.columns,await this.process());
         this.isDirty=false;
-        this.sheetHandler.worksheet.tabColor.set("");
         this.sheetHandler.unprotect()
-        for (let i = 0; i < this.columns.length; i++)
-            this.sheetHandler.worksheet.getRange("$"+this.sheetHandler.columns[this.columns[i]].letter+"$"+(1+this.sheetHandler.settings.headers.length)).fill.clear();
+        for (const column of this.columns) {
+            this.sheetHandler.worksheet.getRange("$"+this.sheetHandler.columns[column].letter+"$"+(1+this.sheetHandler.settings.headers.length)).fill.clear();
+            this.sheetHandler.columns[column].isDirty=false;
+        }
         this.sheetHandler.protect()
     }
 }
@@ -171,7 +177,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
     private data:any[][]=[];
 
     private suppressOnProtectionChanged:number=0;
-    //private suppressOnSelectionChanged:number=0;
+    private suppressOnSelectionChanged:number=0;
     public isCursorLocked:boolean = false;
     public constructor(_context: Excel.RequestContext, _htmlConsole: myConsoleType,_templateHandler:TemplateHandler,_name:string,_settings:TableSheetSettings) {
         super(_context,_htmlConsole,_templateHandler,_name);
@@ -208,12 +214,15 @@ class TableSheetHandler extends sheetHandlerAbstract {
             } else if (this.suppressOnProtectionChanged>0 && args.isProtected==false) this.suppressOnProtectionChanged--;
         }).bind(this)); // prevents user from unprotecting the sheet
         this.worksheet.worksheet!.onVisibilityChanged.add((async (args:Excel.WorksheetVisibilityChangedEventArgs)=>{if (args.visibilityAfter!="Visible")this.worksheet.unhide();await this.context.sync();}).bind(this));
-        /*this.worksheet.worksheet!.onSelectionChanged.add((async (args:Excel.WorksheetSelectionChangedEventArgs)=>{
+        this.worksheet.worksheet!.onSelectionChanged.add((async (args:Excel.WorksheetSelectionChangedEventArgs)=>{
+            //console.log(args);
             if (this.suppressOnSelectionChanged>0) { this.suppressOnSelectionChanged--; return; }
-            else if (this.templateHandler.isCursorLocked) { console.log("setting selected range to \""+this.name+"!$A$1\""); this.suppressOnSelectionChanged++; this.worksheet.getRange("$A$1").select(); await this.context.sync(); }
-        }).bind(this));*/
+            else if (this.templateHandler.isCursorLocked) { this.suppressOnSelectionChanged++; if (this.isSelected) { this.worksheet.getRange("$B$1").select(); await this.context.sync(); } }
+        }).bind(this));
         //this.worksheet.worksheet!
         this.worksheet.worksheet!.onChanged.add(this.onChanged.bind(this));
+        this.worksheet.worksheet!.onActivated.add(this.onActivated.bind(this));
+        this.worksheet.worksheet!.onDeactivated.add(this.onDeactivated.bind(this));
         // sync to apply all changes
         await this.context.sync();
     }
@@ -234,6 +243,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
             totalCustomValue: settings.totalCustomValue,
 
             letter: columnsAlphebet[this.columns.length],
+            isDirty:false,
             sum:0,
             count:0,
             countN:0
@@ -258,19 +268,24 @@ class TableSheetHandler extends sheetHandlerAbstract {
         const columnGroupIndex:number|undefined = this.columnGroupsByColumn[name];
         if (columnGroupIndex!=undefined) {
             const group:TableSheetColumnGroup = this.templateHandler.columnGroups[columnGroupIndex];
-            if (TableSheetColumnGroup.loopDetector.includes(columnGroupIndex)) { this.htmlConsole.log("LOOP DETECTED"); TableSheetColumnGroup.loopDetector=[]; return; }
+            if (TableSheetColumnGroup.loopDetector.includes(columnGroupIndex)) { this.htmlConsole.log("\nLOOP DETECTED"); console.log(TableSheetColumnGroup.loopDetector);console.log(columnGroupIndex); TableSheetColumnGroup.loopDetector=[]; return; }
             TableSheetColumnGroup.loopDetector.push(columnGroupIndex);
-            if (group.isDirty) {
-                if (group.hasInit) return group.clean();
-                else return group.init();
-            }
-            if (TableSheetColumnGroup.loopDetector.length!=0) TableSheetColumnGroup.loopDetector.pop();// should pop the columnGroupIndex off the list
+            return new Promise<void>(async (resolve:()=>void)=>{
+                if (group.isDirty) {
+                    if (group.hasInit) await group.clean();
+                    else await group.init();
+                }
+                if (TableSheetColumnGroup.loopDetector.length>0) TableSheetColumnGroup.loopDetector.pop();// should pop the columnGroupIndex off the list
+                resolve();
+            })
         }
     }
     public async getColumn(name:string):Promise<any[]> {
         // get the index of the column by its name
         let index:number|undefined = this.columnByName[name];
         if (index==undefined) { console.error("Could not find column \""+name+"\""); return []; }
+        // call preProcess on the data in this sheet if it hasnt been already
+        this.preProcess();
         // clean the column before reading it if its needed
         await this.cleanColumn(name);
         // add column group to columns dependencies if needed
@@ -284,21 +299,27 @@ class TableSheetHandler extends sheetHandlerAbstract {
         for (const name of names) {
             const index:number|undefined = this.columnByName[name];
             if (index==undefined) { console.error("Could not find column \""+name+"\""); return []; }
-            await this.cleanColumn(name);
             indices.push(index);
         }
+        // call preProcess on the data in this sheet if it hasnt been already
+        this.preProcess();
+        // clean the column before reading it if its needed
+        for (const name of names)
+            await this.cleanColumn(name);
         // add column group to each columns dependencies if needed
         if (TableSheetHandler.currColumnGroup!=undefined) for (const index of indices) this.columnDependents[index].push(TableSheetHandler.currColumnGroup);
         // return data for each column in the order it was requested
         return this.data.map((el:any[])=>{ return indices.map((index:number)=>el[index]); });
     }
 
-    public preProcess():void {
+    private preProcess():void {
         // pop completely empty lines and lines containing only calculated values
+        console.log("preprocess");
+        console.log(this.columns.map((el:TableSheetColumnData)=>el.isDirty));
         for (let i = this.data.length-1; i >= 0; i--) {
             var lineEmpty:boolean=true;
             for (let j = 0; j < this.data[i].length; j++) {
-                if (this.data[i][j]!=""&&this.columns[j].isInputColumn) {lineEmpty=false;break;}
+                if (this.data[i][j]!=""&&(this.columns[j].isInputColumn||!this.columns[j].isDirty)) {lineEmpty=false;break;}
             }
             if (lineEmpty) this.data.pop();
             else break;
@@ -317,6 +338,8 @@ class TableSheetHandler extends sheetHandlerAbstract {
                 indices.push(index);
             }
         } else indices.push(...(columns as number[]));
+        // call preprocess on the sheet being set if it hasnt since the last postprocess
+        this.preProcess();
         // push empty lines if there is no room to fit new data
         if (values.length>this.data.length) {
             const emptyLine:string = JSON.stringify(this.columns.map(()=>""));// json string of a row with the correct number of columns filled with empty strings
@@ -379,6 +402,14 @@ class TableSheetHandler extends sheetHandlerAbstract {
         this.protect();
         await this.context.sync();
     }
+    public async clean() {
+        if (this.isProcessingChanges) return;
+        for (const column of this.columns) {
+            await this.cleanColumn(column.name);
+        }
+        this.worksheet.tabColor.set("");
+        await this.postProcess();
+    }
 
     //#region get address functions
     // address which is from A1 to column CA and 1000 lines below where the table ends
@@ -405,7 +436,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
     // address containing just table totals
     private getTotalsAddress():string {
         if (!this.anyRowHasTotals) return "";
-        const row:number = 1+this.settings.headers.length+this.data.length+this.settings.numBufferLines+1;
+        const row:number = 1+this.settings.headers.length+Math.max(this.data.length+this.settings.numBufferLines,1)+1;
         return "$A$"+row+":$"+columnsAlphebet[this.columns.length-1]+"$"+row;
     }
     //#endregion get address functions
@@ -466,22 +497,44 @@ class TableSheetHandler extends sheetHandlerAbstract {
             }
         }
     }
+    private changeQueue:Excel.WorksheetChangedEventArgs[] = [];
+    private onChangedTimeoutId:number = -1;
+    private isProcessingChanges:boolean = false;
     private async onChanged(args:Excel.WorksheetChangedEventArgs):Promise<void> {
         if (args.triggerSource=="ThisLocalAddin") return;// dont check for changes from the add-in itself
-        switch (args.changeType) {
-            case "RangeEdited":
-                await this.onRangeEdited(args);
-                break;
-            case "RowDeleted":
-                await this.onRowDeleted(args);
-                break;
-            case "RowInserted":
-                await this.onRowInserted(args);
-                break;
-            default:
-                console.log(args)
-                break;
-        }
+        this.changeQueue.push(args);
+        if (this.onChangedTimeoutId!=-1) clearTimeout(this.onChangedTimeoutId);
+        this.onChangedTimeoutId = setTimeout((async () => {
+            this.onChangedTimeoutId=-1;
+            this.isProcessingChanges=true;
+            await this.templateHandler.lockCursor();
+            while (this.changeQueue.length>0) {
+                const args:Excel.WorksheetChangedEventArgs = this.changeQueue.splice(0,1)[0];
+                switch (args.changeType) {
+                    case "RangeEdited":
+                        await this.onRangeEdited(args);
+                        break;
+                    case "RowDeleted":
+                        await this.onRowDeleted(args);
+                        break;
+                    case "RowInserted":
+                        await this.onRowInserted(args);
+                        break;
+                    default:
+                        console.log(args)
+                        break;
+                }
+            }
+            // resize table and update totals
+            this.unprotect();
+            await this.resize();
+            this.setTotals();
+            this.protect();
+            this.isProcessingChanges=false;
+            // clean everything in this sheet if thats what the user is looking at
+            if (this.isSelected) await this.clean();
+            await this.templateHandler.unlockCursor();
+        }).bind(this), 2000) as unknown as number;
     }
     private async onRangeEdited(args:Excel.WorksheetChangedEventArgs):Promise<void> {
         const isSingleCell = !args.address.includes(":");
@@ -620,11 +673,6 @@ class TableSheetHandler extends sheetHandlerAbstract {
             if (lineEmpty) this.data.pop();
             else break;
         }
-        // resize table and update totals
-        this.unprotect();
-        await this.resize();
-        this.setTotals();
-        this.protect();
         // find groups that have now become "dirty"
         for (let x = columnStart; x <= columnEnd; x++) {
             if (this.columns[x].isInputColumn) {
@@ -664,11 +712,6 @@ class TableSheetHandler extends sheetHandlerAbstract {
             if (lineEmpty) this.data.pop();
             else break;
         }
-        // resize table and update totals
-        this.unprotect();
-        await this.resize();
-        this.setTotals();
-        this.protect();
         // find groups that have now become "dirty"
         for (let x = 0; x < this.columns.length; x++) {
             if (this.columns[x].isInputColumn) {
@@ -697,11 +740,6 @@ class TableSheetHandler extends sheetHandlerAbstract {
             if (lineEmpty) this.data.pop();
             else break;
         }
-        // resize table and update totals
-        this.unprotect();
-        await this.resize();
-        this.setTotals();
-        this.protect();
         // find groups that have now become "dirty"
         for (let x = 0; x < this.columns.length; x++) {
             if (this.columns[x].isInputColumn) {
@@ -711,6 +749,16 @@ class TableSheetHandler extends sheetHandlerAbstract {
             }
         }
         await this.context.sync();
+    }
+
+    public isSelected:boolean = false;
+    private async onActivated(args: Excel.WorksheetActivatedEventArgs):Promise<void> {
+        this.isSelected=true;
+        if (this.templateHandler.isCursorLocked) { this.suppressOnSelectionChanged++; this.templateHandler.activeSheetOnLock!.getRange("$B$1").select(); await this.context.sync(); }
+        else await this.clean();
+    }
+    private async onDeactivated(args: Excel.WorksheetDeactivatedEventArgs):Promise<void> {
+        this.isSelected=false;
     }
 
     //#region formatting functions
@@ -822,6 +870,9 @@ class DataSheetHandler extends sheetHandlerAbstract {
         super(_context,_htmlConsole,_templateHandler,_name);
         //this.settings=_settings;
     }
+
+    private suppressOnSelectionChanged:number=0;
+    public isSelected:boolean = false;
     public async init():Promise<void> {
         this.worksheet.getWorksheet(this.name);
         if (await this.worksheet.isNullObject.asyncGet())
@@ -839,7 +890,20 @@ class DataSheetHandler extends sheetHandlerAbstract {
         
         this.worksheet.worksheet!.onNameChanged.add((async (args:Excel.WorksheetNameChangedEventArgs)=>{this.worksheet.worksheet!.name=this.name;await this.context.sync();}).bind(this));
         this.worksheet.worksheet!.onVisibilityChanged.add((async (args:Excel.WorksheetVisibilityChangedEventArgs)=>{if (args.visibilityAfter!="Visible")this.worksheet.unhide();await this.context.sync();}).bind(this));
+        this.worksheet.worksheet!.onSelectionChanged.add((async (args:Excel.WorksheetSelectionChangedEventArgs)=>{
+            //console.log(args);
+            if (this.suppressOnSelectionChanged>0) { this.suppressOnSelectionChanged--; return; }
+            else if (this.templateHandler.isCursorLocked) { this.suppressOnSelectionChanged++; if (this.isSelected) { this.worksheet.getRange("$B$1").select(); await this.context.sync(); } }
+        }).bind(this));
+        this.worksheet.worksheet!.onActivated.add((async (args: Excel.WorksheetActivatedEventArgs)=>{
+            this.isSelected=true;
+            if (this.templateHandler.isCursorLocked) { this.suppressOnSelectionChanged++; this.templateHandler.activeSheetOnLock!.getRange("$B$1").select(); await this.context.sync(); }
+        }).bind(this));
+        this.worksheet.worksheet!.onDeactivated.add((async (args: Excel.WorksheetDeactivatedEventArgs)=>{
+            this.isSelected=false;
+        }).bind(this));
         this.worksheet.worksheet!.onChanged.add(this.onChanged.bind(this));
+
         await this.context.sync();
     }
     public addColumn(settings:DataSheetColumnSettings):void {
@@ -1006,28 +1070,34 @@ class TemplateHandler {
 
     constructor(context: Excel.RequestContext, _htmlConsole: myConsoleType) {
         this.context=context;this.htmlConsole=_htmlConsole;
-        addHtmlButton("Process",this.process.bind(this));
+        addHtmlButton("Process all",this.process.bind(this));
     }
-    /*public activeWorksheet:worksheetWrapper|undefined;
-    public activeRange:rangeWrapper|undefined;
+    public activeSheetOnLock:worksheetWrapper|undefined;
+    public activeRangeOnLock:rangeWrapper|undefined;
     public isCursorLocked:boolean = false;
-    private async lockCursor() {
-        (new worksheetWrapper(this.context)).getActiveWorksheet().getRange("$A$1").select();
-        this.context.sync();
-        this.activeRange = (new rangeWrapper(this.context)).getSelectedRange().track();
+    public async lockCursor() {
+        if (this.isCursorLocked) return;
+        //save which worksheet you are in and where the cursor is
+        this.activeSheetOnLock = (new worksheetWrapper(this.context)).getActiveWorksheet();
+        await this.context.sync();
+        this.activeRangeOnLock = (new rangeWrapper(this.context)).getSelectedRange().track();
+        // move cursor to B1, and set isCursorLocked to true so the sheet code can enforce this
+        this.activeSheetOnLock.getRange("$B$1").select();
+        await this.context.sync();
         this.isCursorLocked=true;
     }
-    private async unlockCursor() {
-        if (!this.isCursorLocked) return;
+    public async unlockCursor() {
         this.isCursorLocked=false;
-        this.activeRange!.select().untrack();
-        this.activeWorksheet=undefined;
-        this.activeRange=undefined;
+        // put cursor back to where it was
+        this.activeRangeOnLock!.select();
         await this.context.sync();
-    }*/
+        this.activeRangeOnLock!.untrack();
+        await this.context.sync();
+        this.activeSheetOnLock=undefined;
+        this.activeRangeOnLock=undefined;
+    }
+
     async init():Promise<void> {
-        //this.context.application.calculationMode=Excel.CalculationMode.manual;
-        //this.context.application.suspendScreenUpdatingUntilNextSync();
         // setup sheets
         for (let i = 0; i < this.SheetInitOrder.length; i++) {
             await this.SheetInitOrder[i].init();
@@ -1040,13 +1110,15 @@ class TemplateHandler {
         Sheet1.worksheet!.delete();
         await this.context.sync();
 
-        // setup column groups
-        for (let i = 0; i < this.tableSheets.length; i++) this.tableSheets[i].preProcess();
-        //await this.lockCursor();
-        for (let i = 0; i < this.columnGroups.length; i++) await this.columnGroups[i].init();
-        for (let i = 0; i < this.tableSheets.length; i++) await this.tableSheets[i].postProcess();
-        //await this.unlockCursor();
-        //this.context.application.calculationMode=Excel.CalculationMode.automatic;
+        //get the active sheet
+        const name:string = await (new worksheetWrapper(this.context)).getActiveWorksheet().name.asyncGet();
+        for (let i = 0; i < this.tableSheets.length; i++) {
+            if (this.tableSheets[i].name==name) {
+                this.tableSheets[i].isSelected=true;
+            }
+        }
+        // process data completely
+        await this.process();
     }
     addTableSheet(name:string,settings:TableSheetSettings):TableSheetHandler {
         this.tableSheetsByName[name]=this.tableSheets.length;
@@ -1116,11 +1188,10 @@ class TemplateHandler {
     //#endregion specialized column groups
 
     async process():Promise<void> {
-        for (let i = 0; i < this.tableSheets.length; i++) this.tableSheets[i].preProcess();
-        //await this.lockCursor();
-        for (let i = 0; i < this.columnGroups.length; i++) await this.columnGroups[i].clean();
-        for (let i = 0; i < this.tableSheets.length; i++) await this.tableSheets[i].postProcess();
-        //await this.unlockCursor();
+        await this.lockCursor();
+        for (let i = 0; i < this.tableSheets.length; i++)
+            await this.tableSheets[i].clean();
+        await this.unlockCursor();
     }
 }
 abstract class templateInterface {

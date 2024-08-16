@@ -67,7 +67,7 @@ class TestingTemplate extends templateInterface {
             var map:{[key:string]:[number,number,number]} = {};
             for (let i = 0; i < Columns.length; i++) {
                 const [key2,amount1,amount2,datacopy2]:[string,number,number,number] = Columns[i];
-                if ((typeof key2 == undefined)||(typeof amount1 != "number")||(typeof amount2 != "number")||(typeof datacopy2 != "number")) continue;
+                if ((key2=="")||(typeof key2 == undefined)||(typeof amount1 != "number")||(typeof amount2 != "number")||(typeof datacopy2 != "number")) continue;
                 else {
                     if (map[key2]!=undefined) { map[key2][0]+=amount1;map[key2][1]+=amount2;map[key2][2]+=datacopy2; }
                     else map[key2]=[amount1,amount2,datacopy2];
@@ -95,7 +95,7 @@ class TestingTemplate extends templateInterface {
             var map:{[key:string]:[number,number,number]} = {};
             for (let i = 0; i < Columns.length; i++) {
                 const [key3,amount1,amount2,datacopy1]:[string,number,number,number] = Columns[i];
-                if ((typeof key3 == undefined)||(typeof amount1 != "number")||(typeof amount2 != "number")||(typeof datacopy1 != "number")) continue;
+                if ((key3=="")||(typeof key3 == undefined)||(typeof amount1 != "number")||(typeof amount2 != "number")||(typeof datacopy1 != "number")) continue;
                 else {
                     if (map[key3]!=undefined) { map[key3][0]+=amount1;map[key3][1]+=amount2;map[key3][2]+=datacopy1; }
                     else map[key3]=[amount1,amount2,datacopy1];

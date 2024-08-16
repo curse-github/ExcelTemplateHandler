@@ -9,6 +9,7 @@ on changes:
 
 on processing:
     when process is pressed on the sections that need it will be updated.
+        AND only the data in the sheet that you are looking at will actually get updated
     when processing the cursor gets locked in place to prevent the user from making changes during that time
     
 general stuff:
