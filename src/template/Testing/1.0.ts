@@ -91,7 +91,6 @@ class TestingTemplate extends templateInterface {
         this.byKey3Sheet.addColumn({ isInputColumn:false, name:"Average",    numberFormat:AccountNumberFormat, columnWidth:25, alignment:"Left"  , hasTotal:true, totalType:"Avg" });
         this.byKey3Sheet.addColumn({ isInputColumn:false, name:"DataCopy 1", numberFormat:AccountNumberFormat, columnWidth:25, alignment:"Left"  , hasTotal:true, totalType:"Sum" });
         this.templateHandler.addColumnGroup(this.byKey3Sheet,["Key 3","Amount 1","Amount 2","DataCopy 1"],(async ():Promise<any[]> => {
-            await new Promise<void>((resolve:()=>void)=>{setTimeout(resolve, 5000);});
             const Columns:any[] = await this.TestingSheet.getColumns(["Key 3","Amount 1","Amount 2","DataCopy 1"]);
             var map:{[key:string]:[number,number,number]} = {};
             for (let i = 0; i < Columns.length; i++) {

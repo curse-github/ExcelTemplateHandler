@@ -11,11 +11,11 @@ on processing:
     when process is pressed on the sections that need it will be updated.
     when processing the cursor gets locked in place to prevent the user from making changes during that time
     
-
-general:
+general stuff:
     A template can now have "settings" which get saved and loaded from the metadata section of the file
-    totals are now be static values not formulas
+    totals are now completely static values not formulas
     problems with filtering and sorting should be fixed
+    inserting and deleting columns is fully supported
 
 easy functions for:
     aliasing a column into another sheet

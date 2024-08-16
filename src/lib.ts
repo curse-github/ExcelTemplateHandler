@@ -123,6 +123,10 @@ class rangeWrapper {
 		if (this.range != null) this.range.merge();
 		return this;
 	}
+	delete(shift:Excel.DeleteShiftDirection):rangeWrapper {
+		if (this.range != null) this.range.delete(shift);
+		return this;
+	}
 	lock():rangeWrapper {
 		if (this.range != null) this.range.format.protection.locked=true;
 		return this;

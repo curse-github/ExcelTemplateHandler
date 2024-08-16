@@ -147,8 +147,8 @@ class TableSheetHandler extends sheetHandlerAbstract {
         allowInsertColumns: false,
         allowDeleteColumns: false,
         allowFormatRows: false,
-        allowInsertRows: false,
-        allowDeleteRows: false,
+        allowInsertRows: true,
+        allowDeleteRows: true,
 
         allowFormatCells: false,
         allowEditScenarios: false,
@@ -171,7 +171,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
     private data:any[][]=[];
 
     private suppressOnProtectionChanged:number=0;
-    private suppressOnSelectionChanged:number=0;
+    //private suppressOnSelectionChanged:number=0;
     public isCursorLocked:boolean = false;
     public constructor(_context: Excel.RequestContext, _htmlConsole: myConsoleType,_templateHandler:TemplateHandler,_name:string,_settings:TableSheetSettings) {
         super(_context,_htmlConsole,_templateHandler,_name);
@@ -208,10 +208,11 @@ class TableSheetHandler extends sheetHandlerAbstract {
             } else if (this.suppressOnProtectionChanged>0 && args.isProtected==false) this.suppressOnProtectionChanged--;
         }).bind(this)); // prevents user from unprotecting the sheet
         this.worksheet.worksheet!.onVisibilityChanged.add((async (args:Excel.WorksheetVisibilityChangedEventArgs)=>{if (args.visibilityAfter!="Visible")this.worksheet.unhide();await this.context.sync();}).bind(this));
-        this.worksheet.worksheet!.onSelectionChanged.add((async (args:Excel.WorksheetSelectionChangedEventArgs)=>{
+        /*this.worksheet.worksheet!.onSelectionChanged.add((async (args:Excel.WorksheetSelectionChangedEventArgs)=>{
             if (this.suppressOnSelectionChanged>0) { this.suppressOnSelectionChanged--; return; }
             else if (this.templateHandler.isCursorLocked) { console.log("setting selected range to \""+this.name+"!$A$1\""); this.suppressOnSelectionChanged++; this.worksheet.getRange("$A$1").select(); await this.context.sync(); }
-        }).bind(this));
+        }).bind(this));*/
+        //this.worksheet.worksheet!
         this.worksheet.worksheet!.onChanged.add(this.onChanged.bind(this));
         // sync to apply all changes
         await this.context.sync();
@@ -332,11 +333,12 @@ class TableSheetHandler extends sheetHandlerAbstract {
             }
             // push empty values if new data is shorter than old data
             for (let y = values.length; y < this.data.length; y++) {
+                columnData.push([""]);
                 this.data[y][indices[i]]="";
             }
             const letter:string = this.columns[indices[i]].letter;
             this.queue.push({
-                address:"$"+letter+"$"+(2+this.settings.headers.length)+":$"+letter+"$"+(values.length+(1+this.settings.headers.length)),
+                address:"$"+letter+"$"+(2+this.settings.headers.length)+":$"+letter+"$"+(columnData.length+(1+this.settings.headers.length)),
                 data:columnData
             });
         }
@@ -385,7 +387,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
     }
     // address containing rows of table headers body and totals but all the way to column CA
     private getUnlockedAreaAddress():string {
-        return "$A$"+(1+this.settings.headers.length)+":$CA$"+(1+this.settings.headers.length+Math.max(this.data.length+this.settings.numBufferLines,1)+(this.anyRowHasTotals?1:0));
+        return "$"+(1+this.settings.headers.length)+":$"+(1+this.settings.headers.length+Math.max(this.data.length+this.settings.numBufferLines,1)+(this.anyRowHasTotals?1:0));
     }
     // address containing table headers body and totals
     private getTableAddress():string {
@@ -466,9 +468,24 @@ class TableSheetHandler extends sheetHandlerAbstract {
     }
     private async onChanged(args:Excel.WorksheetChangedEventArgs):Promise<void> {
         if (args.triggerSource=="ThisLocalAddin") return;// dont check for changes from the add-in itself
+        switch (args.changeType) {
+            case "RangeEdited":
+                await this.onRangeEdited(args);
+                break;
+            case "RowDeleted":
+                await this.onRowDeleted(args);
+                break;
+            case "RowInserted":
+                await this.onRowInserted(args);
+                break;
+            default:
+                console.log(args)
+                break;
+        }
+    }
+    private async onRangeEdited(args:Excel.WorksheetChangedEventArgs):Promise<void> {
         const isSingleCell = !args.address.includes(":");
         // parse the beginning and endings rows and columns of the range that was modified
-        // if it was just one cell rowStart==rowEnd and columnStart==columnEnd
         let rowStart:number;
         let columnStart:number;
         let rowEnd:number;
@@ -480,9 +497,10 @@ class TableSheetHandler extends sheetHandlerAbstract {
         } else {
             const address:[string,string]=args.address.split(":") as [string,string];
             rowStart = parseInt(address[0].replace(/\D/g,""));
-            columnStart = columnsAlphebet.indexOf(address[0].replace(rowStart.toString(),""));
+            const tmp:string = address[0].replace(rowStart.toString(),"")
+            columnStart = ((tmp!="")?columnsAlphebet.indexOf(tmp):0);
             rowEnd = parseInt(address[1].replace(/\D/g,""));
-            columnEnd = columnsAlphebet.indexOf(address[1].replace(rowEnd.toString(),""));
+            columnEnd = ((tmp!="")?columnsAlphebet.indexOf(address[1].replace(rowEnd.toString(),"")):(this.columns.length-1));
         }
         if (rowStart>rowEnd || columnStart>columnEnd) { this.htmlConsole.log("ERROR"); return;}// ERROR
         // adjust values for indexing
@@ -493,8 +511,8 @@ class TableSheetHandler extends sheetHandlerAbstract {
         const highestColumnAllowed=this.columns.length-1;
         if (rowStart==-1) { this.setHeaders(); rowStart=0; if (isSingleCell) return; }// if the data overrode the headers
         if (rowEnd==-1) return;// if range also ended on the headers row, just return
-        if (rowStart>highestRowAllowed+1) { this.worksheet.getRange(args.address).clear().select(); await this.context.sync(); return;}// if changed area row is completely out of range of the table
-        if (columnStart>highestColumnAllowed) { this.worksheet.getRange(args.address).clear().select(); await this.context.sync(); return;}// if changed area column is completely out of range of the table
+        if (rowStart>highestRowAllowed+1) { this.worksheet.getRange(args.address).clear(); await this.context.sync(); return;}// if changed area row is completely out of range of the table
+        if (columnStart>highestColumnAllowed) { this.worksheet.getRange(args.address).clear(); await this.context.sync(); return;}// if changed area column is completely out of range of the table
         if (rowEnd>highestRowAllowed) {
             if (columnEnd>highestColumnAllowed) {
                 const bottomRight:string = ":$"+columnsAlphebet[columnEnd]+"$"+(rowEnd+(2+this.settings.headers.length));
@@ -613,6 +631,82 @@ class TableSheetHandler extends sheetHandlerAbstract {
                 const columnGroups:TableSheetColumnGroup[] = this.columnDependents[x];
                 for (let i = 0; i < columnGroups.length; i++) {
                     columnGroups[i].setDirty();
+                }
+            }
+        }
+        await this.context.sync();
+    }
+    private async onRowDeleted(args:Excel.WorksheetChangedEventArgs):Promise<void> {
+        let [rowStart,rowEnd]:[number,number] = args.address.split(":").map((val:string)=>(parseInt(val)-(2+this.settings.headers.length))) as [number,number];
+        if (rowStart<this.data.length) {
+            for (let x = 0; x < this.columns.length; x++) {
+                for (let y = rowStart; y <= Math.min(rowEnd,this.data.length-1); y++) {
+                    const oldValue:any = this.data[y][x];
+                    // maintain correct total values
+                    if (oldValue !== "") {
+                        this.columns[x].count--;
+                        if (typeof oldValue == "number") {
+                            this.columns[x].countN--;
+                            this.columns[x].sum-=oldValue;
+                        }
+                    }
+                }
+            }
+            this.data=this.data.filter((line:any[],index:number)=>((index<rowStart)||(index>rowEnd)));
+        }
+        this.lastTableSize-=1+rowEnd-rowStart
+        // pop completely empty lines
+        for (let i = this.data.length-1; i >= 0; i--) {
+            var lineEmpty:boolean=true;
+            for (let j = 0; j < this.data[i].length; j++) {
+                if (this.data[i][j]!="") {lineEmpty=false;break;}
+            }
+            if (lineEmpty) this.data.pop();
+            else break;
+        }
+        // resize table and update totals
+        this.unprotect();
+        await this.resize();
+        this.setTotals();
+        this.protect();
+        // find groups that have now become "dirty"
+        for (let x = 0; x < this.columns.length; x++) {
+            if (this.columns[x].isInputColumn) {
+                for (const columnGroup of this.columnDependents[x]) {
+                    columnGroup.setDirty();
+                }
+            }
+        }
+        await this.context.sync();
+    }
+    private async onRowInserted(args:Excel.WorksheetChangedEventArgs):Promise<void> {
+        let [rowStart,rowEnd]:[number,number] = args.address.split(":").map((val:string)=>(parseInt(val)-(2+this.settings.headers.length))) as [number,number];
+        if (rowStart<=this.data.length) {
+            const emptyLine:string = JSON.stringify(this.columns.map(()=>""));// json string of a row with the correct number of columns filled with empty strings
+            for (let y = rowStart; y <= rowEnd; y++) {
+                this.data.splice(rowStart,0,JSON.parse(emptyLine) as any[]);
+            }
+        }
+        this.lastTableSize+=1+rowEnd-rowStart
+        // pop completely empty lines
+        for (let i = this.data.length-1; i >= 0; i--) {
+            var lineEmpty:boolean=true;
+            for (let j = 0; j < this.data[i].length; j++) {
+                if (this.data[i][j]!="") {lineEmpty=false;break;}
+            }
+            if (lineEmpty) this.data.pop();
+            else break;
+        }
+        // resize table and update totals
+        this.unprotect();
+        await this.resize();
+        this.setTotals();
+        this.protect();
+        // find groups that have now become "dirty"
+        for (let x = 0; x < this.columns.length; x++) {
+            if (this.columns[x].isInputColumn) {
+                for (const columnGroup of this.columnDependents[x]) {
+                    columnGroup.setDirty();
                 }
             }
         }
@@ -818,7 +912,7 @@ class DataSheetHandler extends sheetHandlerAbstract {
         const highestColumnAllowed=this.columns.length-1;
         if (rowStart==-1) { /*this.setHeaders();*/ rowStart=0; if (isSingleCell) return; }// if the data overrode the headers
         if (rowEnd==-1) return;// if range also ended on the headers row, just return
-        if (columnStart>highestColumnAllowed) { this.worksheet.getRange(args.address).clear().select(); await this.context.sync(); return;}// if changed area column is completely out of range of the table
+        if (columnStart>highestColumnAllowed) { this.worksheet.getRange(args.address).clear(); await this.context.sync(); return;}// if changed area column is completely out of range of the table
         if (columnEnd>highestColumnAllowed) {
             this.worksheet.getRange("$"+columnsAlphebet[this.columns.length]+"$"+(rowStart+2)+":$"+columnsAlphebet[columnEnd]+"$"+(rowEnd+2)).clear();
             columnEnd=highestColumnAllowed; await this.context.sync();
@@ -914,7 +1008,7 @@ class TemplateHandler {
         this.context=context;this.htmlConsole=_htmlConsole;
         addHtmlButton("Process",this.process.bind(this));
     }
-    public activeWorksheet:worksheetWrapper|undefined;
+    /*public activeWorksheet:worksheetWrapper|undefined;
     public activeRange:rangeWrapper|undefined;
     public isCursorLocked:boolean = false;
     private async lockCursor() {
@@ -930,7 +1024,7 @@ class TemplateHandler {
         this.activeWorksheet=undefined;
         this.activeRange=undefined;
         await this.context.sync();
-    }
+    }*/
     async init():Promise<void> {
         //this.context.application.calculationMode=Excel.CalculationMode.manual;
         //this.context.application.suspendScreenUpdatingUntilNextSync();
@@ -948,10 +1042,10 @@ class TemplateHandler {
 
         // setup column groups
         for (let i = 0; i < this.tableSheets.length; i++) this.tableSheets[i].preProcess();
-        await this.lockCursor();
+        //await this.lockCursor();
         for (let i = 0; i < this.columnGroups.length; i++) await this.columnGroups[i].init();
         for (let i = 0; i < this.tableSheets.length; i++) await this.tableSheets[i].postProcess();
-        await this.unlockCursor();
+        //await this.unlockCursor();
         //this.context.application.calculationMode=Excel.CalculationMode.automatic;
     }
     addTableSheet(name:string,settings:TableSheetSettings):TableSheetHandler {
@@ -1023,10 +1117,10 @@ class TemplateHandler {
 
     async process():Promise<void> {
         for (let i = 0; i < this.tableSheets.length; i++) this.tableSheets[i].preProcess();
-        await this.lockCursor();
+        //await this.lockCursor();
         for (let i = 0; i < this.columnGroups.length; i++) await this.columnGroups[i].clean();
         for (let i = 0; i < this.tableSheets.length; i++) await this.tableSheets[i].postProcess();
-        await this.unlockCursor();
+        //await this.unlockCursor();
     }
 }
 abstract class templateInterface {
