@@ -263,29 +263,35 @@ class TableSheetHandler extends sheetHandlerAbstract {
     }
 
     public async cleanColumn(name:string):Promise<void> {
+        // dont bother trying to find a column group containing an input column
+        if (this.columns[this.columnByName[name]].isInputColumn) return;
         // clean any column group that the column you are trying to read belongs to
         // if it is not dirt the function will return immediately
         const columnGroupIndex:number|undefined = this.columnGroupsByColumn[name];
+        //console.log("Attempting to clean column "+this.name+"![\""+name+"\"]");
         if (columnGroupIndex!=undefined) {
             const group:TableSheetColumnGroup = this.templateHandler.columnGroups[columnGroupIndex];
             if (TableSheetColumnGroup.loopDetector.includes(columnGroupIndex)) { this.htmlConsole.log("\nLOOP DETECTED"); console.log(TableSheetColumnGroup.loopDetector);console.log(columnGroupIndex); TableSheetColumnGroup.loopDetector=[]; return; }
             TableSheetColumnGroup.loopDetector.push(columnGroupIndex);
             return new Promise<void>(async (resolve:()=>void)=>{
                 if (group.isDirty) {
+                    //console.log("Cleaning column group "+this.name+"![\""+group.columns.map((index:number)=>this.columns[index].name).join("\",\"")+"\"]")
                     if (group.hasInit) await group.clean();
                     else await group.init();
-                }
+                }/* else {
+                    console.log("Not cleaning column group "+this.name+"![\""+group.columns.map((index:number)=>this.columns[index].name).join("\",\"")+"\"]")
+                }*/
                 if (TableSheetColumnGroup.loopDetector.length>0) TableSheetColumnGroup.loopDetector.pop();// should pop the columnGroupIndex off the list
                 resolve();
             })
-        }
+        }/* else {
+            console.log("Failed to clean column "+this.name+"![\""+name+"\"]");
+        }*/
     }
     public async getColumn(name:string):Promise<any[]> {
         // get the index of the column by its name
         let index:number|undefined = this.columnByName[name];
         if (index==undefined) { console.error("Could not find column \""+name+"\""); return []; }
-        // call preProcess on the data in this sheet if it hasnt been already
-        this.preProcess();
         // clean the column before reading it if its needed
         await this.cleanColumn(name);
         // add column group to columns dependencies if needed
@@ -301,8 +307,6 @@ class TableSheetHandler extends sheetHandlerAbstract {
             if (index==undefined) { console.error("Could not find column \""+name+"\""); return []; }
             indices.push(index);
         }
-        // call preProcess on the data in this sheet if it hasnt been already
-        this.preProcess();
         // clean the column before reading it if its needed
         for (const name of names)
             await this.cleanColumn(name);
@@ -312,19 +316,6 @@ class TableSheetHandler extends sheetHandlerAbstract {
         return this.data.map((el:any[])=>{ return indices.map((index:number)=>el[index]); });
     }
 
-    private preProcess():void {
-        // pop completely empty lines and lines containing only calculated values
-        console.log("preprocess");
-        console.log(this.columns.map((el:TableSheetColumnData)=>el.isDirty));
-        for (let i = this.data.length-1; i >= 0; i--) {
-            var lineEmpty:boolean=true;
-            for (let j = 0; j < this.data[i].length; j++) {
-                if (this.data[i][j]!=""&&(this.columns[j].isInputColumn||!this.columns[j].isDirty)) {lineEmpty=false;break;}
-            }
-            if (lineEmpty) this.data.pop();
-            else break;
-        }
-    }
     private queue:DataSetQueueItem[] = [];
     public setColumns(columns:(string[]|number[]),values:any[][]):void {
         if (values.length==0) return;
@@ -338,8 +329,6 @@ class TableSheetHandler extends sheetHandlerAbstract {
                 indices.push(index);
             }
         } else indices.push(...(columns as number[]));
-        // call preprocess on the sheet being set if it hasnt since the last postprocess
-        this.preProcess();
         // push empty lines if there is no room to fit new data
         if (values.length>this.data.length) {
             const emptyLine:string = JSON.stringify(this.columns.map(()=>""));// json string of a row with the correct number of columns filled with empty strings
@@ -365,7 +354,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
                 data:columnData
             });
         }
-        // pop completely empty lines
+        // pop lines that are empty, or that have only calculated values that are dirty
         for (let i = this.data.length-1; i >= 0; i--) {
             var lineEmpty:boolean=true;
             for (let j = 0; j < this.data[i].length; j++) {
@@ -404,11 +393,22 @@ class TableSheetHandler extends sheetHandlerAbstract {
     }
     public async clean() {
         if (this.isProcessingChanges) return;
+        // pop lines that are empty, or that have only calculated values that are dirty
+        for (let i = this.data.length-1; i >= 0; i--) {
+            var lineEmpty:boolean=true;
+            for (let j = 0; j < this.data[i].length; j++) {
+                if (this.data[i][j]!=""&&(this.columns[j].isInputColumn||!this.columns[j].isDirty)) {lineEmpty=false;break;}
+            }
+            if (lineEmpty) this.data.pop();
+            else break;
+        }
+        //clean the column group each column belongs to
         for (const column of this.columns) {
             await this.cleanColumn(column.name);
         }
+        // clear the tab color
         this.worksheet.tabColor.set("");
-        await this.postProcess();
+        await this.context.sync();
     }
 
     //#region get address functions
@@ -473,11 +473,11 @@ class TableSheetHandler extends sheetHandlerAbstract {
                 }
             }
         }
-        // pop completely empty lines
+        // pop lines that are empty, or that have only calculated values that are dirty
         for (let i = this.data.length-1; i >= 0; i--) {
             var lineEmpty:boolean=true;
             for (let j = 0; j < this.data[i].length; j++) {
-                if (this.data[i][j]!="") {lineEmpty=false;break;}
+                if (this.data[i][j]!=""&&(this.columns[j].isInputColumn||!this.columns[j].isDirty)) {lineEmpty=false;break;}
             }
             if (lineEmpty) this.data.pop();
             else break;
@@ -504,6 +504,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
         if (args.triggerSource=="ThisLocalAddin") return;// dont check for changes from the add-in itself
         this.changeQueue.push(args);
         if (this.onChangedTimeoutId!=-1) clearTimeout(this.onChangedTimeoutId);
+        if (this.isProcessingChanges) return;
         this.onChangedTimeoutId = setTimeout((async () => {
             this.onChangedTimeoutId=-1;
             this.isProcessingChanges=true;
@@ -525,14 +526,9 @@ class TableSheetHandler extends sheetHandlerAbstract {
                         break;
                 }
             }
-            // resize table and update totals
-            this.unprotect();
-            await this.resize();
-            this.setTotals();
-            this.protect();
             this.isProcessingChanges=false;
-            // clean everything in this sheet if thats what the user is looking at
             if (this.isSelected) await this.clean();
+            await this.postProcess();
             await this.templateHandler.unlockCursor();
         }).bind(this), 2000) as unknown as number;
     }
@@ -660,11 +656,11 @@ class TableSheetHandler extends sheetHandlerAbstract {
             }
             if (inputChanged) {
                 this.worksheet.getRange(newDataAddress).values.set(newData);
-                this.context.sync();
+                await this.context.sync();
             }
             if (!changed) return;// return if there was no change
         }
-        // pop completely empty lines
+        // pop lines that are completely empty
         for (let i = this.data.length-1; i >= 0; i--) {
             var lineEmpty:boolean=true;
             for (let j = 0; j < this.data[i].length; j++) {
@@ -703,7 +699,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
             this.data=this.data.filter((line:any[],index:number)=>((index<rowStart)||(index>rowEnd)));
         }
         this.lastTableSize-=1+rowEnd-rowStart
-        // pop completely empty lines
+        // pop lines that are completely empty
         for (let i = this.data.length-1; i >= 0; i--) {
             var lineEmpty:boolean=true;
             for (let j = 0; j < this.data[i].length; j++) {
@@ -731,7 +727,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
             }
         }
         this.lastTableSize+=1+rowEnd-rowStart
-        // pop completely empty lines
+        // pop lines that are completely empty
         for (let i = this.data.length-1; i >= 0; i--) {
             var lineEmpty:boolean=true;
             for (let j = 0; j < this.data[i].length; j++) {
@@ -755,7 +751,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
     private async onActivated(args: Excel.WorksheetActivatedEventArgs):Promise<void> {
         this.isSelected=true;
         if (this.templateHandler.isCursorLocked) { this.suppressOnSelectionChanged++; this.templateHandler.activeSheetOnLock!.getRange("$B$1").select(); await this.context.sync(); }
-        else await this.clean();
+        else { await this.clean(); await this.postProcess(); }
     }
     private async onDeactivated(args: Excel.WorksheetDeactivatedEventArgs):Promise<void> {
         this.isSelected=false;
@@ -798,6 +794,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
         // set sheet headers
         if (this.settings.headers.length==0 || this.settings.headers[0].length==0) return;
         if (this.settings.headerOverrideA1) {
+            this.worksheet.getRange("$A$1:$"+columnsAlphebet[this.settings.headers[0].length-1]+"$"+this.settings.headers.length).clear();
             this.worksheet.getRange("$A$1:$"+columnsAlphebet[this.settings.headers[0].length-1]+"$"+this.settings.headers.length)
                 .values.set(this.settings.headers)
                 .setFontSize(this.settings.headersFontSize);
@@ -805,6 +802,9 @@ class TableSheetHandler extends sheetHandlerAbstract {
             // set font size for whole area
             this.worksheet.getRange("$A$1:$"+columnsAlphebet[this.settings.headers[0].length-1]+"$"+this.settings.headers.length)
                 .setFontSize(this.settings.headersFontSize);
+            // clear area of header
+            this.worksheet.getRange("$B$1:$"+columnsAlphebet[this.columns.length-1]+"$1").clear();
+            this.worksheet.getRange("$A$2:$"+columnsAlphebet[this.columns.length-1]+"$"+this.settings.headers.length).clear();
             // set other data just not cell A1
             if (this.settings.headers[0].length>1)
                 this.worksheet.getRange("$B$1:$"+columnsAlphebet[this.settings.headers[0].length-1]+"$1").values.set([this.settings.headers[0].filter((cell:any,index:number)=>index!=0)]);
@@ -1189,8 +1189,8 @@ class TemplateHandler {
 
     async process():Promise<void> {
         await this.lockCursor();
-        for (let i = 0; i < this.tableSheets.length; i++)
-            await this.tableSheets[i].clean();
+        for (let i = 0; i < this.tableSheets.length; i++) await this.tableSheets[i].clean();
+        for (let i = 0; i < this.tableSheets.length; i++) await this.tableSheets[i].postProcess();
         await this.unlockCursor();
     }
 }
