@@ -63,7 +63,7 @@ class TestingTemplate extends templateInterface {
         this.byKey2Sheet.addColumn({ isInputColumn:false, name:"DataCopy 2", numberFormat:AccountNumberFormat, columnWidth:25, alignment:"Left"  , hasTotal:true, totalType:"Sum" });
 
         this.templateHandler.addColumnGroup(this.byKey2Sheet,["Key 2","Amount 1","Amount 2","DataCopy 2"],(async ():Promise<any[]> => {
-            const Columns:any[] = await this.TestingSheet.getColumns(["Key 2","Amount 1","Amount 2","DataCopy 2"]);
+            const Columns:any[] = await this.TestingSheet.getVisibleColumns(["Key 2","Amount 1","Amount 2","DataCopy 2"]);
             var map:{[key:string]:[number,number,number]} = {};
             for (let i = 0; i < Columns.length; i++) {
                 const [key2,amount1,amount2,datacopy2]:[string,number,number,number] = Columns[i];
@@ -91,7 +91,7 @@ class TestingTemplate extends templateInterface {
         this.byKey3Sheet.addColumn({ isInputColumn:false, name:"Average",    numberFormat:AccountNumberFormat, columnWidth:25, alignment:"Left"  , hasTotal:true, totalType:"Avg" });
         this.byKey3Sheet.addColumn({ isInputColumn:false, name:"DataCopy 1", numberFormat:AccountNumberFormat, columnWidth:25, alignment:"Left"  , hasTotal:true, totalType:"Sum" });
         this.templateHandler.addColumnGroup(this.byKey3Sheet,["Key 3","Amount 1","Amount 2","DataCopy 1"],(async ():Promise<any[]> => {
-            const Columns:any[] = await this.TestingSheet.getColumns(["Key 3","Amount 1","Amount 2","DataCopy 1"]);
+            const Columns:any[] = await this.TestingSheet.getVisibleColumns(["Key 3","Amount 1","Amount 2","DataCopy 1"]);
             var map:{[key:string]:[number,number,number]} = {};
             for (let i = 0; i < Columns.length; i++) {
                 const [key3,amount1,amount2,datacopy1]:[string,number,number,number] = Columns[i];
@@ -102,7 +102,7 @@ class TestingTemplate extends templateInterface {
                 }
             }
             const entries:[string,[number,number,number]][] = Object.entries(map);
-            if (entries.length==0) return [["",0,0,0,0]];
+            if (entries.length==0) return [["",0,0,0]];
             return entries.map(([key3,[amount1,amount2,datacopy1]]:[string,[number,number,number]])=>[key3,amount1,amount2,datacopy1]);
         }).bind(this));
         this.templateHandler.averageColumns(this.byKey3Sheet,"Average",this.byKey3Sheet,["Amount 1","Amount 2"]);

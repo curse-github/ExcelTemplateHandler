@@ -171,6 +171,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
     public columns:TableSheetColumnData[]=[];
     public static currColumnGroup:TableSheetColumnGroup|undefined=undefined;
     public columnDependents:TableSheetColumnGroup[][] = []; // list of column group dependents by column
+    public columnDependentChecksVisibility:boolean[][] = []; // list of column group dependents by column
     public columnGroupsByColumn:{[key:string]:number} = {};
     private columnValidators:(((newValue:any)=>any|undefined)|undefined)[] = [];
 
@@ -206,6 +207,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
         this.setTotals();
         this.setFormat();
         this.protect();
+        this.table.table!.clearFilters();
         // sync to apply all changes
         await this.context.sync();
         // add event callbacks
@@ -227,6 +229,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
         this.worksheet.worksheet!.onDeactivated.add(this.onDeactivated.bind(this));
         this.worksheet.worksheet!.onChanged.add(this.onChanged.bind(this));
         this.worksheet.worksheet!.onRowSorted.add(this.onSorted.bind(this));
+        this.worksheet.worksheet!.onRowHiddenChanged.add(this.onHiddenChanged.bind(this));
     }
     anyRowHasTotals:boolean = false;
     public addColumn(settings:TableSheetColumnSettings):void {
@@ -254,6 +257,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
         this.columnValidators.push(undefined);
         if (columnData.hasTotal) this.anyRowHasTotals=true;
         this.columnDependents.push([]);
+        this.columnDependentChecksVisibility.push([]);
     }
     private addIndexColumn() {
         this.columnByName["Index"]=this.columns.length;
@@ -280,6 +284,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
         this.columnValidators.push(undefined);
         if (columnData.hasTotal) this.anyRowHasTotals=true;
         this.columnDependents.push([]);
+        this.columnDependentChecksVisibility.push([]);
     }
     // sets function to validate all input, it takes in the input and returns either the new value or undefined, which sets it to the old value
     public setColumnValidation(name:string,fn:((newValue:any)=>any|undefined)) {
@@ -323,9 +328,23 @@ class TableSheetHandler extends sheetHandlerAbstract {
         // clean the column before reading it if its needed
         await this.cleanColumn(name);
         // add column group to columns dependencies if needed
-        if (TableSheetHandler.currColumnGroup!=undefined) this.columnDependents[index].push(TableSheetHandler.currColumnGroup);
+        if (TableSheetHandler.currColumnGroup!=undefined) {this.columnDependents[index].push(TableSheetHandler.currColumnGroup);this.columnDependentChecksVisibility[index].push(false);}
         // return data for the column requested
         return this.data.map((el:any[])=>el[index!]);
+    }
+    public async getVisibleColumn(name:string):Promise<any[]> {
+        // get the index of the column by its name
+        let index:number|undefined = this.columnByName[name];
+        if (index==undefined) { console.error("Could not find column \""+name+"\""); return []; }
+        // clean the column before reading it if its needed
+        await this.cleanColumn(name);
+        // add column group to columns dependencies if needed
+        if (TableSheetHandler.currColumnGroup!=undefined) {
+            if (TableSheetHandler.currColumnGroup.sheetHandler.name===this.name) { console.error("Visible only data can not be read from within the same sheet"); return []; }
+            this.columnDependents[index].push(TableSheetHandler.currColumnGroup);this.columnDependentChecksVisibility[index].push(true);
+        }
+        // return data for the column requested
+        return this.data.map((el:any[])=>el[index!]).filter((el:any,index:number)=>(!this.isRowHidden[index]));
     }
     public async getColumns(names:string[]):Promise<any[][]> {
         // parse the names of the columns into their indices
@@ -339,9 +358,28 @@ class TableSheetHandler extends sheetHandlerAbstract {
         for (const name of names)
             await this.cleanColumn(name);
         // add column group to each columns dependencies if needed
-        if (TableSheetHandler.currColumnGroup!=undefined) for (const index of indices) this.columnDependents[index].push(TableSheetHandler.currColumnGroup);
+        if (TableSheetHandler.currColumnGroup!=undefined) for (const index of indices) {this.columnDependents[index].push(TableSheetHandler.currColumnGroup);this.columnDependentChecksVisibility[index].push(false);}
         // return data for each column in the order it was requested
         return this.data.map((el:any[])=>{ return indices.map((index:number)=>el[index]); });
+    }
+    public async getVisibleColumns(names:string[]):Promise<any[][]> {
+        // parse the names of the columns into their indices
+        let indices:number[] = [];
+        for (const name of names) {
+            const index:number|undefined = this.columnByName[name];
+            if (index==undefined) { console.error("Could not find column \""+name+"\""); return []; }
+            indices.push(index);
+        }
+        // clean the column before reading it if its needed
+        for (const name of names)
+            await this.cleanColumn(name);
+        // add column group to each columns dependencies if needed
+        if (TableSheetHandler.currColumnGroup!=undefined) {
+            if (TableSheetHandler.currColumnGroup.sheetHandler.name===this.name) { console.error("Visible only data can not be read from within the same sheet"); return []; }
+            for (const index of indices) {this.columnDependents[index].push(TableSheetHandler.currColumnGroup);this.columnDependentChecksVisibility[index].push(true);}
+        }
+        // return data for each column in the order it was requested
+        return this.data.map((el:any[])=>{ return indices.map((index:number)=>el[index]); }).filter((el:any,index:number)=>(!this.isRowHidden[index]));
     }
 
     private queue:DataSetQueueItem[] = [];
@@ -362,6 +400,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
             const emptyLine:string = JSON.stringify(this.columns.map(()=>""));// json string of a row with the correct number of columns filled with empty strings
             for (let i = this.data.length; i <= values.length; i++) {
                 this.data.push(JSON.parse(emptyLine) as any[]);
+                this.isRowHidden.push(false);
             }
         }
         // set column data in "this.data" and restructure data into individual columns to set with the excel api in postProcess
@@ -388,7 +427,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
             for (let j = 0; j < this.data[i].length; j++) {
                 if (this.data[i][j]!="") {lineEmpty=false;break;}
             }
-            if (lineEmpty) this.data.pop();
+            if (lineEmpty) {this.data.pop();this.isRowHidden.pop();}
             else break;
         }
         // updated sums of changed columns
@@ -433,7 +472,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
             for (let j = 0; j < this.data[i].length; j++) {
                 if (this.data[i][j]!=""&&(this.columns[j].isInputColumn||!this.columns[j].isDirty)) {lineEmpty=false;break;}
             }
-            if (lineEmpty) this.data.pop();
+            if (lineEmpty) {this.data.pop();this.isRowHidden.pop();}
             else break;
         }
         // clean the column group each column belongs to
@@ -524,10 +563,10 @@ class TableSheetHandler extends sheetHandlerAbstract {
             for (let j = 0; j < this.data[i].length; j++) {
                 if (this.data[i][j]!=""&&(this.columns[j].isInputColumn||!this.columns[j].isDirty)) {lineEmpty=false;break;}
             }
-            if (lineEmpty) this.data.pop();
+            if (lineEmpty) {this.data.pop();this.isRowHidden.pop();}
             else break;
         }
-        // calculate totals 
+        // calculate totals
         for (let i = 0; i < this.columns.length; i++) {
             if (this.columns[i].isInputColumn) {
                 for (let j = 0; j < this.data.length; j++) {
@@ -541,6 +580,8 @@ class TableSheetHandler extends sheetHandlerAbstract {
                 }
             }
         }
+        // find visible rows
+        for (let i = 0; i < this.data.length; i++) this.isRowHidden.push(false);
     }
     public isSelected:boolean = false;
     private async onActivated(args: Excel.WorksheetActivatedEventArgs):Promise<void> {
@@ -646,6 +687,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
             const emptyLine:string = JSON.stringify(this.columns.map(()=>""));// json string of a row with the correct number of columns filled with empty strings
             for (let i = this.data.length; i <= rowEnd; i++) {
                 this.data.push(JSON.parse(emptyLine) as any[]);
+                this.isRowHidden.push(false);
             }
         }
 
@@ -728,11 +770,10 @@ class TableSheetHandler extends sheetHandlerAbstract {
             for (let j = 0; j < this.data[i].length; j++) {
                 if (this.data[i][j]!="") {lineEmpty=false;break;}
             }
-            if (lineEmpty) this.data.pop();
+            if (lineEmpty) {this.data.pop();this.isRowHidden.pop();}
             else break;
         }
         // find groups that have now become "dirty"
-        console.log("onRangeEdited settings columns dirty")
         for (let x = columnStart; x <= columnEnd; x++) {
             if (this.columns[x].isInputColumn) {
                 const columnGroups:TableSheetColumnGroup[] = this.columnDependents[x];
@@ -768,11 +809,10 @@ class TableSheetHandler extends sheetHandlerAbstract {
             for (let j = 0; j < this.data[i].length; j++) {
                 if (this.data[i][j]!="") {lineEmpty=false;break;}
             }
-            if (lineEmpty) this.data.pop();
+            if (lineEmpty) {this.data.pop();this.isRowHidden.pop();}
             else break;
         }
         // find groups that have now become "dirty"
-        console.log("onRowDeleted settings columns dirty")
         for (let x = 0; x < this.columns.length; x++) {
             if (this.columns[x].isInputColumn) {
                 for (const columnGroup of this.columnDependents[x])
@@ -800,11 +840,10 @@ class TableSheetHandler extends sheetHandlerAbstract {
             for (let j = 0; j < this.data[i].length; j++) {
                 if (this.data[i][j]!="") {lineEmpty=false;break;}
             }
-            if (lineEmpty) this.data.pop();
+            if (lineEmpty) {this.data.pop();this.isRowHidden.pop();}
             else break;
         }
         // find groups that have now become "dirty"
-        console.log("onRowInserted settings columns dirty")
         for (let x = 0; x < this.columns.length; x++) {
             if (this.columns[x].isInputColumn) {
                 for (const columnGroup of this.columnDependents[x])
@@ -838,8 +877,9 @@ class TableSheetHandler extends sheetHandlerAbstract {
         this.isProcessingChanges=true;
         const oldData:any[][] = this.data;
         this.data=[];
-        for (let i = 0; i < indexColumn.length; i++) {
-            this.data.push(oldData[indexColumn[i]]);
+        for (const i of indexColumn) {
+            this.data.push(oldData[i]);
+            this.isRowHidden.push(this.isRowHidden[i]);
         }
         // find groups that have now become "dirty"
         for (let x = 0; x < this.columns.length; x++) {
@@ -858,6 +898,33 @@ class TableSheetHandler extends sheetHandlerAbstract {
         await this.clean();
         await this.postProcess();
         if (!startedLocked) await this.templateHandler.unlockCursor();
+    }
+    private isRowHidden:boolean[] = [];
+    private async onHiddenChanged(args:Excel.WorksheetRowHiddenChangedEventArgs) {
+        const Addrs:string[] = args.address.split(",");
+        for (let i = 0; i < Addrs.length; i++) {
+            if (Addrs[i].includes(":")) {
+                const [rowStart,rowEnd]:[number,number] = Addrs[i].split(":").map((el:string)=>(parseInt(el)-(2+this.settings.headers.length))) as [number,number];
+                if (rowStart>=this.isRowHidden.length) continue;
+                for (let y = rowStart; y < Math.min(rowEnd+1,this.isRowHidden.length); y++) {
+                    this.isRowHidden[y]=args.changeType==="Hidden";
+                }
+            } else {
+                const row = parseInt(Addrs[i])-(2+this.settings.headers.length);
+                if (row>=this.isRowHidden.length) continue;
+                this.isRowHidden[row]=args.changeType==="Hidden";
+            }
+        }
+        // find groups that have now become "dirty"
+        for (let x = 0; x < this.columns.length; x++) {
+            if (this.columns[x].isInputColumn) {
+                for (let i = 0; i < this.columnDependents[x].length; i++) {
+                    if (this.columnDependentChecksVisibility[x][i])
+                        this.columnDependents[x][i].setDirty();
+                }
+            }
+        }
+        this.context.sync()
     }
 
     //#region formatting functions
@@ -1116,7 +1183,7 @@ class DataSheetHandler extends sheetHandlerAbstract {
             for (let j = 0; j < this.data[i].length; j++) {
                 if (this.data[i][j]!="") {lineEmpty=false;break;}
             }
-            if (lineEmpty) { poppedData=true; this.data.pop(); }
+            if (lineEmpty) {poppedData=true;this.data.pop();}
             else break;
         }
         // if the data changed size, reset the format
