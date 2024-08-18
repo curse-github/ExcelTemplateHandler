@@ -214,6 +214,7 @@ async function validateAndLoad() {
 	myConsole.log("Validation succeeded.");
 
 	// if successfull, set taskpane to auto open
+	myConsole.log("Setting AutoShowTaskpaneWithDocument")
 	Office.context.document.settings.set("Office.AutoShowTaskpaneWithDocument",true);
 	await Office.context.document.settings.saveAsync();
 
