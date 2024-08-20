@@ -454,10 +454,11 @@ class TableSheetHandler extends sheetHandlerAbstract {
         // resize data, set data from the queue, clear the queue, reset formatting, and sync.
         this.unprotect();
         await this.resize();
-        for (let i = 0; i < this.queue.length; i++)
-            this.worksheet.getRange(this.queue[i].address).values.set(this.queue[i].data);
+        for (const item of this.queue)
+            this.worksheet.getRange(item.address).values.set(item.data);
         this.queue=[];
         this.setTotals();
+        this.setHeaders();
         this.setFormat();
         this.table.table!.sort.reapply();
         this.table.table!.reapplyFilters();
@@ -605,24 +606,26 @@ class TableSheetHandler extends sheetHandlerAbstract {
             this.isProcessingChanges=true;
             await this.templateHandler.lockCursor();
             while (this.changeQueue.length>0) {
-                const args:Excel.WorksheetChangedEventArgs = this.changeQueue.splice(0,1)[0];
+                const args:Excel.WorksheetChangedEventArgs = this.changeQueue[0];
                 switch (args.changeType) {
                     case "RangeEdited":
                         await this.onRangeEdited(args);
                         break;
                     case "RowDeleted":
-                        await this.onRowDeleted(args);
+                        this.onRowDeleted(args);
                         break;
                     case "RowInserted":
-                        await this.onRowInserted(args);
+                        this.onRowInserted(args);
                         break;
                     default:
                         console.log(args)
                         break;
                 }
+                this.changeQueue.splice(0,1)[0];// remove first element in queue
             }
             this.unprotect();
             await this.resize();
+            this.setHeaders();
             this.setTotals();
             this.setFormat();
             this.protect();
@@ -631,6 +634,8 @@ class TableSheetHandler extends sheetHandlerAbstract {
             if (this.isSelected) {
                 await this.clean();
                 await this.postProcess();
+            } else {
+
             }
             await this.templateHandler.unlockCursor();
         }).bind(this), 2000) as unknown as number;
@@ -784,7 +789,7 @@ class TableSheetHandler extends sheetHandlerAbstract {
         }
         await this.context.sync();
     }
-    private async onRowDeleted(args:Excel.WorksheetChangedEventArgs):Promise<void> {
+    private onRowDeleted(args:Excel.WorksheetChangedEventArgs):void {
         let [rowStart,rowEnd]:[number,number] = args.address.split(":").map((val:string)=>(parseInt(val)-(2+this.settings.headers.length))) as [number,number];
         if (rowStart<this.data.length) {
             for (let x = 0; x < this.columns.length; x++) {
@@ -823,9 +828,8 @@ class TableSheetHandler extends sheetHandlerAbstract {
                     this.templateHandler.columnGroups[groupIndex].setDirty();
             }
         }
-        await this.context.sync();
     }
-    private async onRowInserted(args:Excel.WorksheetChangedEventArgs):Promise<void> {
+    private onRowInserted(args:Excel.WorksheetChangedEventArgs):void {
         let [rowStart,rowEnd]:[number,number] = args.address.split(":").map((val:string)=>(parseInt(val)-(2+this.settings.headers.length))) as [number,number];
         if (rowStart<=this.data.length) {
             const emptyLine:string = JSON.stringify(this.columns.map(()=>""));// json string of a row with the correct number of columns filled with empty strings
@@ -854,7 +858,6 @@ class TableSheetHandler extends sheetHandlerAbstract {
                     this.templateHandler.columnGroups[groupIndex].setDirty();
             }
         }
-        await this.context.sync();
     }
     private hasSort:boolean = false;
     private indexColumn:number[] = [];

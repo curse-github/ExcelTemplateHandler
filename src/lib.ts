@@ -891,7 +891,7 @@ class tableWrapper {
 
 async function RequestContextAsync():Promise<Excel.RequestContext> {
 	return new Promise<Excel.RequestContext>((resolve:(value:Excel.RequestContext)=>void)=>{
-		Excel.run(async (context:Excel.RequestContext) => {
+		Excel.run({ delayForCellEdit: true },async (context:Excel.RequestContext) => {
 			resolve(context);
 		});
 	});
